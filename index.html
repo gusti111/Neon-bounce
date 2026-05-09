@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NEON BOUNCE</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&family=Share+Tech+Mono&display=swap');
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  #c {
+    display: block;
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+  }
+
+  #overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(6px, 1.8vh, 18px);
+    background: rgba(0,0,0,0.8);
+    z-index: 10;
+    transition: opacity 0.25s ease;
+    padding: clamp(16px, 4vw, 40px);
+    text-align: center;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+
+  #oTitle {
+    font-family: 'Orbitron', monospace;
+    font-weight: 900;
+    font-size: clamp(1.6rem, 5vw + 2vh, 5rem);
+    color: #00ffff;
+    text-shadow: 0 0 10px #00ffff, 0 0 40px #00ffff, 0 0 80px rgba(0,255,255,0.3);
+    letter-spacing: 0.08em;
+    animation: flicker 5s infinite;
+  }
+  #oTitle.red {
+    color: #ff2828;
+    text-shadow: 0 0 10px #ff2828, 0 0 40px #ff2828, 0 0 80px rgba(255,40,40,0.3);
+    animation: none;
+  }
+  #oSub {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: clamp(0.65rem, 1.4vw + 0.5vh, 1rem);
+    color: rgba(0,255,255,0.5);
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+  }
+  #oScore {
+    font-family: 'Orbitron', monospace;
+    font-size: clamp(0.9rem, 2.5vw + 1vh, 2rem);
+    color: #fff;
+  }
+  #oScore span { color: #ffd700; }
+  #oBest {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: clamp(0.7rem, 1.5vw + 0.3vh, 0.95rem);
+    color: rgba(255,215,0,0.65);
+  }
+  #oCta {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: clamp(0.65rem, 1.3vw + 0.3vh, 0.9rem);
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 0.15em;
+    animation: blink 1.4s step-end infinite;
+    margin-top: clamp(4px, 1vh, 12px);
+  }
+
+  #spdAlert {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    font-family: 'Orbitron', monospace;
+    font-weight: 700;
+    font-size: clamp(1rem, 3.5vw, 2.2rem);
+    color: #ffd700;
+    text-shadow: 0 0 24px #ffd700;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 30;
+    white-space: nowrap;
+    transition: opacity 0.15s;
+  }
+  #spdAlert.on { opacity: 1; }
+
+  @keyframes flicker {
+    0%,92%,100%{ opacity:1 } 93%{ opacity:.5 } 94%{ opacity:1 } 96%{ opacity:.3 } 97%{ opacity:1 }
+  }
+  @keyframes blink {
+    0%,100%{ opacity:1 } 50%{ opacity:0 }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="overlay">
+  <div id="oTitle">NEON BOUNCE</div>
+  <div id="oSub">infinite runner</div>
+  <div id="oScore" style="display:none">SKOR &nbsp;<span id="oScoreVal">0</span></div>
+  <div id="oBest"  style="display:none">BEST &nbsp;<span id="oBestVal">0</span></div>
+  <div id="oCta">[ SPACE / TAP UNTUK MULAI ]</div>
+</div>
+<div id="spdAlert">⚡ SPEED UP!</div>
+
+<script>
+"use strict";
+
+// ─── Elemen DOM ───────────────────────────────────────────────────────
+const canvas   = document.getElementById('c');
+const ctx      = canvas.getContext('2d');
+const overlay  = document.getElementById('overlay');
+const alertEl  = document.getElementById('spdAlert');
+
+// ─── Dimensi global (diperbarui oleh resize()) ───────────────────────
+let W, H, GROUND_Y, BALL_R, SC; // SC = scale factor
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2); // max 2x untuk performa
+  W = window.innerWidth;
+  H = window.innerHeight;
+
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+
+  // Reset transform sebelum set scale baru (hindari akumulasi)
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Scale factor berdasarkan sisi terpendek layar, referensi 480px
+  SC       = Math.min(W, H) / 480;
+  GROUND_Y = Math.round(H * 0.885);
+  BALL_R   = Math.max(8, Math.round(SC * 14));
+
+  if (game) {
+    game.ball.groundY = GROUND_Y;
+    game.ball.r       = BALL_R;
+    game.ball.bx      = Math.round(W * 0.14);
+    if (game.state !== 'playing') game.ball.snap();
+  }
+}
+
+// ─── High Score ───────────────────────────────────────────────────────
+const HS = {
+  key: 'nb3_hs',
+  load() { return +(localStorage.getItem(this.key) || 0); },
+  save(v) { try { localStorage.setItem(this.key, v); } catch(_){} }
+};
+
+// ─── Speed Alert ─────────────────────────────────────────────────────
+let alertTid = 0;
+function flashAlert(txt) {
+  alertEl.textContent = txt;
+  alertEl.classList.add('on');
+  clearTimeout(alertTid);
+  alertTid = setTimeout(() => alertEl.classList.remove('on'), 1400);
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  BALL
+// ════════════════════════════════════════════════════════════════════
+class Ball {
+  constructor() {
+    this.bx      = Math.round(W * 0.14);
+    this.r       = BALL_R;
+    this.groundY = GROUND_Y;
+    this.y       = 0;
+    this.vy      = 0;
+    this.snap();
+  }
+  snap() { this.y = this.groundY - this.r; this.vy = 0; }
+
+  get x() { return this.bx; }
+  get onGround() { return this.y >= this.groundY - this.r - 1; }
+  get gravity()  { return 0.42 * SC; }
+  get jumpPow()  { return -12.5 * SC; }
+
+  jump() { if (this.onGround) this.vy = this.jumpPow; }
+
+  update() {
+    this.vy += this.gravity;
+    this.y  += this.vy;
+    if (this.y >= this.groundY - this.r) { this.y = this.groundY - this.r; this.vy = 0; }
+  }
+
+  // Bounding box dengan margin kecil agar collision tidak terlalu kejam
+  get bb() {
+    const m = this.r * 0.22;
+    return { x: this.x - this.r + m, y: this.y - this.r + m,
+             w: this.r * 2 - m * 2,  h: this.r * 2 - m * 2 };
+  }
+
+  draw() {
+    const { x, y, r } = this;
+    // Glow aura
+    const g = ctx.createRadialGradient(x, y, r * 0.1, x, y, r * 2.8);
+    g.addColorStop(0, 'rgba(0,255,255,0.22)');
+    g.addColorStop(1, 'rgba(0,255,255,0)');
+    ctx.beginPath(); ctx.arc(x, y, r * 2.8, 0, Math.PI * 2);
+    ctx.fillStyle = g; ctx.fill();
+    // Bola
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle   = '#00ffff';
+    ctx.shadowBlur  = r * 1.4;
+    ctx.shadowColor = '#00ffff';
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // Highlight
+    ctx.beginPath(); ctx.arc(x - r * 0.27, y - r * 0.27, r * 0.2, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.fill();
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  OBSTACLE
+// ════════════════════════════════════════════════════════════════════
+class Obs {
+  constructor(x, y, w, h, color) {
+    this.x = x; this.y = y; this.w = w; this.h = h;
+    this.color  = color;
+    this.passed = false;
+  }
+  update(spd) { this.x -= spd; }
+  get dead() { return this.x + this.w < -20; }
+  get bb()   { return { x: this.x, y: this.y, w: this.w, h: this.h }; }
+
+  draw() {
+    const { x, y, w, h, color } = this;
+    ctx.shadowBlur  = Math.round(SC * 12);
+    ctx.shadowColor = color;
+    ctx.fillStyle   = color;
+    ctx.fillRect(x, y, w, h);
+    // Bright top rim
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.fillRect(x, y, w, Math.max(2, SC * 2.5));
+    // Right edge shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(x + w - Math.max(2, SC * 2), y, Math.max(2, SC * 2), h);
+    ctx.shadowBlur = 0;
+  }
+}
+
+// ─── Pattern Spawner — 7 variasi pola rintangan ───────────────────────
+// Setiap pattern mengembalikan array Obs siap pakai
+function spawnPattern(pid) {
+  const s  = SC;
+  const bX = W + 70;
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  switch (pid) {
+    case 0: { // Ground rendah
+      const h = Math.round(rnd(32, 52) * s);
+      const w = Math.round(rnd(22, 38) * s);
+      return [new Obs(bX, GROUND_Y - h, w, h, '#ff2828')];
+    }
+    case 1: { // Ground tinggi
+      const h = Math.round(rnd(60, 95) * s);
+      const w = Math.round(rnd(20, 32) * s);
+      return [new Obs(bX, GROUND_Y - h, w, h, '#ff3a3a')];
+    }
+    case 2: { // Aerial — melayang rendah (harus lewat bawah)
+      const h   = Math.round(rnd(28, 44) * s);
+      const w   = Math.round(rnd(24, 38) * s);
+      const topY = GROUND_Y - BALL_R * 4.5 - h;
+      const minY = Math.round(H * 0.1);
+      const y = Math.max(minY, Math.round(rnd(Math.max(minY, topY - 20), topY + 10)));
+      return [new Obs(bX, y, w, h, '#ff7700')];
+    }
+    case 3: { // Aerial tinggi — melayang di tengah layar
+      const h = Math.round(rnd(32, 50) * s);
+      const w = Math.round(rnd(26, 42) * s);
+      const minY = Math.round(H * 0.25);
+      const maxY = Math.round(H * 0.5);
+      const y = minY + Math.random() * (maxY - minY) | 0;
+      return [new Obs(bX, y, w, h, '#ff9900')];
+    }
+    case 4: { // PIPE — dua rintangan (atas + bawah), ada celah di tengah
+      const gapH  = BALL_R * 4.2;                        // celah untuk bola lewat
+      const gapMid = Math.round(rnd(H * 0.35, H * 0.58)); // posisi tengah celah
+      const topH  = gapMid - gapH / 2;
+      const botY  = gapMid + gapH / 2;
+      const botH  = GROUND_Y - botY;
+      if (topH < 20 || botH < 20) return spawnPattern(0);
+      const w = Math.round(rnd(22, 34) * s);
+      return [
+        new Obs(bX, 0,    w, topH, '#cc00ff'),
+        new Obs(bX, botY, w, botH, '#cc00ff'),
+      ];
+    }
+    case 5: { // Double ground berurutan
+      const h  = Math.round(rnd(35, 55) * s);
+      const w  = Math.round(rnd(18, 28) * s);
+      const gap = Math.round(rnd(14, 22) * s);
+      return [
+        new Obs(bX,           GROUND_Y - h, w, h, '#ff2828'),
+        new Obs(bX + w + gap, GROUND_Y - h, w, h, '#ff2828'),
+      ];
+    }
+    case 6: { // Combo: aerial rendah + ground setelahnya (timing challenge)
+      const ah = Math.round(rnd(26, 36) * s);
+      const aw = Math.round(rnd(20, 30) * s);
+      const aY  = GROUND_Y - BALL_R * 2.8 - ah;
+      if (aY < H * 0.08) return spawnPattern(0);
+      const gh = Math.round(rnd(32, 48) * s);
+      const gw = Math.round(rnd(20, 28) * s);
+      const gapBetween = Math.round(rnd(36, 55) * s);
+      return [
+        new Obs(bX,                  aY,             aw, ah, '#ff7700'),
+        new Obs(bX + aw + gapBetween, GROUND_Y - gh, gw, gh, '#ff2828'),
+      ];
+    }
+    default: return spawnPattern(0);
+  }
+}
+
+// Pilih pola secara acak sesuai fase kesulitan
+function pickPattern(speed) {
+  const phase = Math.min((speed - 5) / 13, 1); // 0..1
+  const unlocked = Math.min(6, Math.floor(phase * 7));
+  const r = Math.random();
+  // Pola mudah lebih sering muncul di awal
+  if (r < 0.30)                  return 0;
+  if (r < 0.55 || unlocked < 2) return 1;
+  if (r < 0.70 || unlocked < 3) return 2;
+  if (r < 0.80 || unlocked < 4) return 3;
+  if (r < 0.88 || unlocked < 5) return 4;
+  if (r < 0.94 || unlocked < 6) return 5;
+  return 6;
+}
+
+// ─── AABB collision ─────────────────────────────────────────────────
+function overlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  GAME
+// ════════════════════════════════════════════════════════════════════
+class Game {
+  constructor() {
+    this.state      = 'waiting';
+    this.ball       = new Ball();
+    this.obs        = [];
+    this.pts        = [];   // partikel
+    this.score      = 0;
+    this.hi         = HS.load();
+    this.speed      = 5;
+    this.spawnCD    = 70;
+    this.startMs    = 0;
+    this.lastSpdSec = 0;
+    this._loop();
+  }
+
+  startGame() {
+    this.obs        = [];
+    this.pts        = [];
+    this.score      = 0;
+    this.speed      = 5;
+    this.spawnCD    = 70;
+    this.startMs    = performance.now();
+    this.lastSpdSec = 0;
+    this.ball.snap();
+    this.state      = 'playing';
+    overlay.classList.add('hidden');
+  }
+
+  _loop() {
+    requestAnimationFrame(() => this._loop());
+    if (this.state === 'playing') this._update();
+    this._draw();
+  }
+
+  _update() {
+    // 1. Difficulty: setiap 30 detik, kecepatan naik 1.2 (maks 18)
+    const elapsed = (performance.now() - this.startMs) / 1000;
+    if (elapsed >= this.lastSpdSec + 30 && this.speed < 18) {
+      this.speed      = Math.min(18, +(this.speed + 1.2).toFixed(1));
+      this.lastSpdSec = elapsed;
+      flashAlert('⚡ SPEED UP!  SPD ' + this.speed.toFixed(1));
+      this._burst(W * 0.5, H * 0.42, '#ffd700', 14);
+    }
+
+    // 2. Ball
+    this.ball.update();
+
+    // 3. Spawn
+    this.spawnCD--;
+    if (this.spawnCD <= 0) {
+      const pid  = pickPattern(this.speed);
+      const news = spawnPattern(pid);
+      this.obs.push(...news);
+
+      const extra  = Math.max(0, this.speed - 5);
+      const minG   = Math.max(24, 58 - extra * 2.8) | 0;
+      const maxG   = Math.max(42, 100 - extra * 2.8) | 0;
+      this.spawnCD = minG + (Math.random() * (maxG - minG) | 0);
+    }
+
+    // 4. Move & cull
+    for (const o of this.obs) o.update(this.speed);
+    this.obs = this.obs.filter(o => !o.dead);
+
+    // 5. Collision
+    const bb = this.ball.bb;
+    for (const o of this.obs) {
+      if (overlap(bb, o.bb)) {
+        this._burst(this.ball.x, this.ball.y, '#00ffff', 26);
+        this._end(); return;
+      }
+    }
+
+    // 6. Score
+    for (const o of this.obs) {
+      if (!o.passed && o.x + o.w < this.ball.x - this.ball.r) {
+        o.passed = true; this.score++;
+      }
+    }
+
+    // 7. Particles
+    this.pts = this.pts.filter(p => p.life > 0);
+    for (const p of this.pts) {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.18 * SC; p.life--;
+    }
+  }
+
+  _end() {
+    this.state = 'gameover';
+    if (this.score > this.hi) { this.hi = this.score; HS.save(this.hi); }
+    // Overlay
+    const t = document.getElementById('oTitle');
+    t.textContent = 'GAME OVER'; t.className = 'red';
+    document.getElementById('oSub').textContent   = 'neon bounce';
+    document.getElementById('oScore').style.display = 'block';
+    document.getElementById('oScoreVal').textContent = this.score;
+    document.getElementById('oBest').style.display   = 'block';
+    document.getElementById('oBestVal').textContent  = this.hi;
+    document.getElementById('oCta').textContent = '[ SPACE / TAP UNTUK MAIN LAGI ]';
+    overlay.classList.remove('hidden');
+  }
+
+  _burst(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = (1 + Math.random() * 5) * SC;
+      this.pts.push({ x, y,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s - 2 * SC,
+        life: (30 + Math.random() * 25) | 0,
+        sz: (1.5 + Math.random() * 2.5) * SC, color });
+    }
+  }
+
+  // ── Draw ──────────────────────────────────────────────────────────
+  _draw() {
+    // Bersihkan frame
+    ctx.fillStyle = '#020804';
+    ctx.fillRect(0, 0, W, H);
+
+    this._grid();
+    this._ground();
+
+    for (const o of this.obs) o.draw();
+    this.ball.draw();
+
+    // Partikel
+    ctx.save();
+    for (const p of this.pts) {
+      ctx.globalAlpha = Math.max(0, p.life / 50);
+      ctx.shadowBlur  = 8; ctx.shadowColor = p.color;
+      ctx.fillStyle   = p.color;
+      ctx.fillRect(p.x - p.sz / 2, p.y - p.sz / 2, p.sz, p.sz);
+    }
+    ctx.restore();
+
+    if (this.state === 'playing' || this.state === 'gameover') {
+      this._hud();
+      if (this.state === 'playing') { this._spdBar(); this._timerBar(); }
+    }
+  }
+
+  _grid() {
+    const gap = Math.round(Math.min(W, H) * 0.06);
+    ctx.fillStyle = '#0c150c';
+    for (let x = 0; x < W; x += gap)
+      for (let y = 0; y < H; y += gap)
+        ctx.fillRect(x, y, 1, 1);
+  }
+
+  _ground() {
+    const grd = ctx.createLinearGradient(0, GROUND_Y - 16, 0, GROUND_Y + 10);
+    grd.addColorStop(0, 'rgba(0,255,255,0)');
+    grd.addColorStop(1, 'rgba(0,255,255,0.1)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, GROUND_Y - 16, W, 26);
+
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth   = Math.max(1.5, SC * 2);
+    ctx.shadowBlur  = 14; ctx.shadowColor = '#00ffff';
+    ctx.beginPath(); ctx.moveTo(0, GROUND_Y); ctx.lineTo(W, GROUND_Y); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  _hud() {
+    const pad = Math.round(SC * 14);
+    const fs1 = Math.max(12, Math.round(SC * 22));
+    const fs2 = Math.max(9,  Math.round(SC * 12));
+    ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+
+    ctx.font        = `900 ${fs1}px 'Orbitron', monospace`;
+    ctx.fillStyle   = '#00ffff';
+    ctx.shadowBlur  = 10; ctx.shadowColor = '#00ffff';
+    ctx.fillText(String(this.score).padStart(4, '0'), pad, pad);
+
+    ctx.font        = `${fs2}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle   = '#ffd700';
+    ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 6;
+    ctx.fillText('BEST ' + this.hi, pad, pad + fs1 + 4);
+    ctx.shadowBlur = 0;
+  }
+
+  _spdBar() {
+    const bw  = Math.round(W * 0.13);
+    const bh  = Math.max(4, Math.round(SC * 5));
+    const pad = Math.round(SC * 14);
+    const bx  = W - bw - pad;
+    const by  = pad;
+    const pct = Math.min(1, (this.speed - 5) / 13);
+    const col = pct < 0.45 ? '#00ffff' : pct < 0.75 ? '#ffd700' : '#ff2828';
+
+    ctx.fillStyle = 'rgba(255,255,255,0.07)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle   = col; ctx.shadowBlur = 7; ctx.shadowColor = col;
+    ctx.fillRect(bx, by, Math.round(bw * pct), bh);
+    ctx.shadowBlur = 0;
+
+    const fs = Math.max(8, Math.round(SC * 10));
+    ctx.font      = `${fs}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle = 'rgba(200,200,200,0.4)';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    ctx.fillText('SPD ' + this.speed.toFixed(1), W - pad, by + bh + 3);
+    ctx.textAlign = 'left';
+  }
+
+  _timerBar() {
+    const elapsed   = (performance.now() - this.startMs) / 1000;
+    const sinceLast = elapsed - this.lastSpdSec;
+    const pct       = Math.min(1, sinceLast / 30);
+    const bw  = Math.round(W * 0.13);
+    const bh  = Math.max(3, Math.round(SC * 3.5));
+    const pad = Math.round(SC * 14);
+    const bx  = W - bw - pad;
+    const by  = pad + Math.round(SC * 22);
+
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.fillRect(bx, by, bw, bh);
+    const alpha = 0.25 + 0.75 * pct;
+    ctx.fillStyle = `rgba(255,215,0,${alpha.toFixed(2)})`;
+    ctx.fillRect(bx, by, Math.round(bw * pct), bh);
+
+    const fs = Math.max(8, Math.round(SC * 9));
+    const rem = Math.max(0, 30 - sinceLast).toFixed(0);
+    ctx.font      = `${fs}px 'Share Tech Mono', monospace`;
+    ctx.fillStyle = 'rgba(255,215,0,0.32)';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    ctx.fillText('NEXT SPD ' + rem + 's', W - pad, by + bh + 2);
+    ctx.textAlign = 'left';
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  BOOTSTRAP
+// ════════════════════════════════════════════════════════════════════
+let game;
+resize();
+game = new Game();
+window.addEventListener('resize', () => { resize(); });
+
+function act() {
+  if (game.state === 'waiting' || game.state === 'gameover') {
+    // Reset overlay ke kondisi start
+    const t = document.getElementById('oTitle');
+    t.textContent = 'NEON BOUNCE'; t.className = '';
+    document.getElementById('oSub').textContent    = 'infinite runner';
+    document.getElementById('oScore').style.display = 'none';
+    document.getElementById('oBest').style.display  = 'none';
+    document.getElementById('oCta').textContent     = '[ SPACE / TAP UNTUK MULAI ]';
+    game.startGame();
+  } else if (game.state === 'playing') {
+    game.ball.jump();
+  }
+}
+
+// Keyboard
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.key === ' ' || e.code === 'ArrowUp') {
+    e.preventDefault(); act();
+  }
+});
+
+// Touch — deteksi tap vs swipe
+let ty0 = 0;
+document.addEventListener('touchstart', e => { ty0 = e.touches[0].clientY; }, { passive: true });
+document.addEventListener('touchend',   e => {
+  if (Math.abs(e.changedTouches[0].clientY - ty0) < 25) act();
+}, { passive: true });
+
+// Klik (desktop / overlay)
+canvas.addEventListener('click',  act);
+overlay.addEventListener('click', act);
+</script>
+</body>
+</html>
