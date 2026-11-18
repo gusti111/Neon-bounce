@@ -31,6 +31,22 @@ Neon Bounce is a responsive, single-page endless-runner game. The player jumps t
 | Start or jump | Space, click, or tap |
 | Mobile play | Tap the game area |
 
+## Gameplay loop
+
+```mermaid
+flowchart TD
+    A["Open Neon Bounce"] --> B["Start with Space, click, or tap"]
+    B --> C["Runner moves across the canvas"]
+    C --> D["Player jumps"]
+    D --> E{"Obstacle cleared?"}
+    E -->|Yes| F["Increase score"]
+    F --> G["Update local best score"]
+    G --> C
+    E -->|No| H["Game over"]
+    H --> I["Show current and best score"]
+    I --> B
+```
+
 ## Technology
 
 - HTML5
